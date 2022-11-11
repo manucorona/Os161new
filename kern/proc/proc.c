@@ -80,31 +80,21 @@ proc_create(const char *name)
 	}
 
 	proc->p_numthreads = 0;
-	spinlock_init(&proc->p_lock);
 
-	/* VM fields */
+
+	/*initializing empty address space for the process */
 	proc->p_addrspace = NULL;
 
-	/* VFS fields */
+	/* not sure that we need it */
 	proc->p_cwd = NULL;
+	
+	/*initializes process file table as empty*/
 	for (int i = 0; i < OPEN_MAX; i++)
 		proc->file_table[i] = NULL;
 
-	if (!strcmp(name,"[kernel]")){ // check if is the first process 
-		proc->proc_id = 1;
-	} else {
-		proc->proc_id = -1;
-	}
+	
 	proc->exit_status = false;
 	proc->exit_code =-1;
-	proc->lock = lock_create("Process_lock");
-	if (proc->lock == NULL){
-		return NULL;
-	}
-	proc->cv = cv_create ("Process_cv");
-	if (proc->cv == NULL){
-		return NULL;
-	}
 	return proc;
 }
 
