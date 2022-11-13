@@ -51,71 +51,69 @@ void sys_exit(int exitcode)
 
 
 
+int sys_fork(struct trapframe *tf, int* retval)
+{
+	struct thread* new_thread;
+	struct addrspace* child_addrspace;
+	int err;
 
-int sys_fork (struct trapframe *tf, pid_t * retval) {
-    
-    int err = 0;
-    struct proc *childProcess;
-  
-
-    childProcess = process_create ("Child");
-    if (childProcess == NULL) {
-        return ENOMEM;
-    }
-
-    err = pid_alloc (&childProcess->proc_id);
-    if (err) {
-        *retval = -1;
-        return ENPROC;
-    }
-    process_table[childProcess->proc_id-1] = childProcess;
-    
-    
-    childProcess->parent_id = curproc->proc_id;
-
-    err = as_copy(curproc->p_addrspace, &childProcess->p_addrspace);
-    if (err) {
-        *retval = -1;
-        return err;
-    }
-    
-    for(int i = 0; i < OPEN_MAX; i++) {
-		if(curproc->file_table[i] != NULL){
-			lock_acquire(curproc->file_table[i]->lock);
-			childProcess->file_table[i] = curproc->file_table[i];
-			curproc->file_table[i]->destroy_count++;
-			lock_release(curproc->file_table[i]->lock);
-		}
+	//start by copying the address  space (virtual memory space of the process) from the parent
+	err = as_copy(curthread->t_addrspace, &child_addrspace);
+	if(err)
+	{
+		*retval = -1;
+		return err;
 	}
 
-    /****************  sync part */
-    
-    spinlock_acquire(&curproc->p_lock);
-    if (curproc->p_cwd != NULL){
-        VOP_INCREF(curproc->p_cwd);
-        childProcess->p_cwd = curproc->p_cwd;
-    }
-    spinlock_release(&curproc->p_lock);
+	//create a new trapframe in the kernel space and signal if there is not enough memory
+	struct trapframe *child_tf = (struct trapframe*)kmalloc(sizeof(struct trapframe));
 
-    /*************    sync part ****/
+	*child_tf = *tf;
+	if(child_tf == NULL)
+	{
+		return ENOMEM;
+	}
 
-    struct trapframe *tfChild = (struct trapframe *) kmalloc(sizeof(struct trapframe));
-    *tfChild = *tf;
-    if (tfChild == NULL) {
-        return ENOMEM;
-    }
+	//call thread_fork, to create a new thread based on an existing one, entrypoint is the func in which he starts to execute
+	err = thread_fork("new thread", child_entrypoint, child_tf, child_addrspace, &new_thread);
 
-    err = thread_fork ("Child_thread", childProcess, enter_forked_process, (void *) tfChild, (unsigned long)NULL);
-    if (err) {
-        kfree(tfChild);
-        as_destroy (childProcess->p_addrspace);
-        *retval = -1;
-        return err;
-    }
+	if(err)
+	{
+		kfree(child_tf);
+		as_destroy(child_addrspace);
+		*retval = -1;
+		return err;
+	}
 
-    *retval = childProcess->proc_id;
-    return 0;
+
+	//return value in case of parent: child pid
+	*retval = new_thread->pid; 
+	return 0;
 }
+
+//entry point for the child process
+void child_entrypoint(void* data1, long data2) //i don t know why this values
+{
+	//take the new trapframe from input
+	struct trapframe tf;
+	tf = (struct trapframe*) data1;
+
+	//load and activate child address space
+	curthread->t_addrspace = (struct addrspace*) data2;
+	as_activate(curthread->t_addrspace);
+
+
+	//modify child trapframe in order to signal a success for child
+	tf.tf_a3 = 0; //explain here why those values
+	tf.tf_v0 = 0; 
+	tf.tf_epc += 4; //to avoid to recall the same syscall more times
+
+	//finish, now we can return to user mode
+	mips_usermode(&tf);
+
+
+}
+
 
 
 int sys_waitpid (pid_t pid, int *status, int options, pid_t * retval) {
